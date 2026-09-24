@@ -42,13 +42,6 @@ func runInstall(ctx context.Context, c Context) (int, error) {
 		}
 	}
 
-	realClaude, claudeErr := runtime.FindRealClaude(c.Paths)
-	if claudeErr != nil {
-		c.Output.Warn("claude not found; provider symlinks will be created but the `claude` shim will be skipped — run `clother install` again after installing Claude Code")
-	}
-	if err := runtime.PreserveRealClaude(c.Paths, realClaude); err != nil {
-		return 1, err
-	}
 	if err := c.Paths.EnsureBaseDirs(); err != nil {
 		return 1, err
 	}
@@ -62,13 +55,8 @@ func runInstall(ctx context.Context, c Context) (int, error) {
 	if err := launchers.Sync(execPath, c.Paths, c.Catalog, c.Config, isHomebrew); err != nil {
 		return 1, err
 	}
-	if claudeErr == nil {
-		if err := launchers.InstallClaudeShim(c.Paths, launchers.SymlinkTarget(execPath, isHomebrew)); err != nil {
-			if !errors.Is(err, launchers.ErrClaudeNotShim) {
-				return 1, err
-			}
-			c.Output.Warn("left %s alone: it is not a Clother shim", filepath.Join(c.Paths.BinDir, "claude"))
-		}
+	if err := syncClaudeShim(c, execPath, isHomebrew); err != nil {
+		return 1, err
 	}
 	for _, legacy := range []string{
 		filepath.Join(c.Paths.DataDir, "clother-full.sh"),
@@ -125,4 +113,43 @@ func normalizePathDir(dir string) string {
 		dir = abs
 	}
 	return filepath.Clean(dir)
+}
+
+// wantClaudeShim decides whether install manages the `claude` shim: explicit
+// flags win, otherwise an existing Clother shim is kept and none is created.
+func wantClaudeShim(c Context) bool {
+	if c.Options.ClaudeShim {
+		return true
+	}
+	if c.Options.NoClaudeShim {
+		return false
+	}
+	return launchers.IsClotherShim(filepath.Join(c.Paths.BinDir, "claude"))
+}
+
+// syncClaudeShim installs or refreshes the shim when wanted, moving a real
+// claude out of the slot first; with --no-claude-shim it removes the shim and
+// restores claude-real. A real claude is never moved unless a shim replaces it.
+func syncClaudeShim(c Context, execPath string, isHomebrew bool) error {
+	if !wantClaudeShim(c) {
+		if c.Options.NoClaudeShim {
+			restoreRealClaude(c)
+		}
+		return nil
+	}
+	realClaude, err := runtime.FindRealClaude(c.Paths)
+	if err != nil {
+		c.Output.Warn("claude not found; the `claude` shim was skipped. Run `clother install --claude-shim` again after installing Claude Code")
+		return nil
+	}
+	if err := runtime.PreserveRealClaude(c.Paths, realClaude); err != nil {
+		return err
+	}
+	if err := launchers.InstallClaudeShim(c.Paths, launchers.SymlinkTarget(execPath, isHomebrew)); err != nil {
+		if !errors.Is(err, launchers.ErrClaudeNotShim) {
+			return err
+		}
+		c.Output.Warn("left %s alone: it is not a Clother shim", filepath.Join(c.Paths.BinDir, "claude"))
+	}
+	return nil
 }

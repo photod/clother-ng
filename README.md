@@ -90,7 +90,6 @@ clother update          # downloads and installs latest release
 This installs:
 - `clother`
 - `clother-*` provider launchers
-- resume compatibility for `claude --resume ...`
 
 ### Install Options
 
@@ -112,7 +111,10 @@ export CLOTHER_BIN="$HOME/.local/bin"
 curl -fsSL https://raw.githubusercontent.com/jolehuit/clother/main/scripts/install.sh | bash
 ```
 
-Clother keeps `claude --resume ...` working with Clother features after install.
+Clother never replaces or deletes your `claude`. To make a bare `claude --resume ...`
+go through Clother as well, opt in to the `claude` shim with `clother install --claude-shim`
+(your real `claude` is kept as `claude-real` next to it). `clother install --no-claude-shim`
+removes the shim and puts the real `claude` back. An existing shim is kept on reinstall.
 
 ## Core Usage
 
@@ -370,7 +372,7 @@ Alibaba's Claude Code guide: `auto` as the main model, `qwen3.8-max` for opus,
 |---------|----------|
 | `claude: command not found` | Install Claude CLI first |
 | `clother: command not found` | Run `clother status` to see the installed bin dir, then add that directory to `PATH` and restart your shell |
-| `claude --resume ...` does not behave like Clother | Restart your shell, then run `clother install` again |
+| `claude --resume ...` does not behave like Clother | Run `clother install --claude-shim`, then restart your shell |
 | `--yolo` is not recognized | Restart your shell, then run `clother install` again |
 | `API key not set` | Run `clother config` |
 | `clother-kimi` asks "Do you want to use this API key?" | Answer yes: Kimi Code takes its key as `ANTHROPIC_API_KEY` |
@@ -403,7 +405,7 @@ macOS (zsh/bash) • Linux (zsh/bash) • Windows (WSL)
 Clother is a single Go binary. The installer downloads the release artifact,
 installs `clother` into your bin directory, then creates:
 - `clother-*` symlinks for providers
-- a `claude` shim symlink for resume compatibility
+- optionally (`--claude-shim`) a `claude` shim symlink for resume compatibility
 
 At runtime, the binary resolves the selected profile from its own invocation
 name, loads config and secrets, sets the required Anthropic-compatible
@@ -434,7 +436,7 @@ Anthropic key as `x-api-key` to the provider, next to the provider's own token.
 changes in them (project history, onboarding, MCP server tokens) is merged back
 into your files when the session ends, your Anthropic credentials untouched.
 
-`--yolo` is accepted by Clother launchers and by the Clother `claude` shim as
+`--yolo` is accepted by Clother launchers and by the optional Clother `claude` shim as
 shorthand for `--dangerously-skip-permissions`.
 
 ### Local Release Testing

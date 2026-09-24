@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jolehuit/clother/internal/cli"
 	"github.com/jolehuit/clother/internal/config"
 	"github.com/jolehuit/clother/internal/providers"
 	"github.com/jolehuit/clother/internal/ui"
@@ -60,6 +61,7 @@ func TestRunInstallPreservesSameBinClaude(t *testing.T) {
 		Secrets: config.Secrets{},
 		Catalog: catalog,
 		Output:  output,
+		Options: cli.Options{ClaudeShim: true},
 	})
 	if err != nil {
 		t.Fatalf("runInstall() error = %v", err)

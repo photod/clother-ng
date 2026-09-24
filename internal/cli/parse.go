@@ -13,6 +13,10 @@ type Options struct {
 	NoBanner bool
 	BinDir   string
 	Format   string
+	// ClaudeShim and NoClaudeShim opt in to or out of the `claude` shim on
+	// install. With neither, an existing Clother shim is kept as is.
+	ClaudeShim   bool
+	NoClaudeShim bool
 }
 
 type Parsed struct {
@@ -45,6 +49,10 @@ func Parse(args []string) (Parsed, error) {
 			parsed.Options.NoInput = true
 		case "--no-banner":
 			parsed.Options.NoBanner = true
+		case "--claude-shim":
+			parsed.Options.ClaudeShim = true
+		case "--no-claude-shim":
+			parsed.Options.NoClaudeShim = true
 		case "--json":
 			parsed.Options.Format = "json"
 		case "--plain":
@@ -66,6 +74,9 @@ func Parse(args []string) (Parsed, error) {
 		}
 	}
 
+	if parsed.Options.ClaudeShim && parsed.Options.NoClaudeShim {
+		return Parsed{}, fmt.Errorf("--claude-shim and --no-claude-shim are mutually exclusive")
+	}
 	if len(positional) > 0 {
 		parsed.Command = positional[0]
 		parsed.Args = positional[1:]

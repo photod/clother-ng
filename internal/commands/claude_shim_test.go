@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jolehuit/clother/internal/cli"
 	"github.com/jolehuit/clother/internal/config"
 	"github.com/jolehuit/clother/internal/launchers"
 	"github.com/jolehuit/clother/internal/providers"
@@ -256,6 +257,7 @@ func TestRunInstallCreatesClotherShimWhenRealClaudeFound(t *testing.T) {
 		Secrets: config.Secrets{},
 		Catalog: catalog,
 		Output:  output,
+		Options: cli.Options{ClaudeShim: true},
 	})
 	if err != nil {
 		t.Fatalf("runInstall() error = %v", err)
@@ -345,6 +347,7 @@ func TestRunInstallUpgradeOverExistingShimKeepsRealClaude(t *testing.T) {
 		Secrets: config.Secrets{},
 		Catalog: catalog,
 		Output:  output,
+		Options: cli.Options{ClaudeShim: true},
 	})
 	if err != nil {
 		t.Fatalf("runInstall() error = %v", err)
@@ -452,5 +455,302 @@ func TestRunUninstallLeavesForeignSymlinkClaudeUntouched(t *testing.T) {
 	}
 	if got != target {
 		t.Fatalf("claude symlink target changed: got %q, want %q", got, target)
+	}
+}
+
+// New default behavior: the claude shim is opt-in. With no flags and a
+// regular-file real claude already sitting in BinDir, runInstall must leave
+// it alone entirely -- no shim, no claude-real. This is the key behavior
+// change from the old "shim by default" install.
+func TestRunInstallDefaultLeavesRealClaudeUntouched(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	binDir := filepath.Join(root, "bin")
+
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	t.Setenv("CLOTHER_BIN", binDir)
+	t.Setenv("CLOTHER_SKIP_SELF_UPDATE", "1")
+
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	claudePath := filepath.Join(binDir, "claude")
+	realContent := []byte("#!/bin/sh\necho real\n")
+	if err := os.WriteFile(claudePath, realContent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// binDir/claude is the only claude on PATH, so it is unambiguously "the"
+	// real claude regardless of what else is installed on the host running
+	// this test.
+	t.Setenv("PATH", binDir)
+
+	paths, err := config.Detect("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := providers.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.File{
+		Version:           1,
+		ProviderOverrides: map[string]config.ProviderOverride{},
+		OpenRouterAliases: map[string]string{},
+		CustomProviders:   map[string]config.CustomProvider{},
+	}
+	output := &ui.Output{Stdout: io.Discard, Stderr: io.Discard, Format: ui.FormatHuman}
+
+	code, err := runInstall(context.Background(), Context{
+		Paths:   paths,
+		Config:  cfg,
+		Secrets: config.Secrets{},
+		Catalog: catalog,
+		Output:  output,
+	})
+	if err != nil {
+		t.Fatalf("runInstall() error = %v", err)
+	}
+	if code != 0 {
+		t.Fatalf("runInstall() code = %d, want 0", code)
+	}
+
+	info, err := os.Lstat(claudePath)
+	if err != nil {
+		t.Fatalf("claude should still exist: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("claude should remain a regular file, not become a shim, with no flags")
+	}
+	got, err := os.ReadFile(claudePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(realContent) {
+		t.Fatalf("claude content changed: got %q, want %q", got, realContent)
+	}
+	if _, err := os.Lstat(filepath.Join(binDir, "claude-real")); !os.IsNotExist(err) {
+		t.Fatalf("claude-real should not be created with no flags, stat err = %v", err)
+	}
+}
+
+// Regression guard: with no flags, an existing Clother shim from a previous
+// install is kept as is, and the real claude it preserved is untouched.
+func TestRunInstallDefaultKeepsExistingClotherShim(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need elevated privileges on windows")
+	}
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	binDir := filepath.Join(root, "bin")
+
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	t.Setenv("CLOTHER_BIN", binDir)
+	t.Setenv("CLOTHER_SKIP_SELF_UPDATE", "1")
+
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "clother"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("clother", filepath.Join(binDir, "claude")); err != nil {
+		t.Fatal(err)
+	}
+	realContent := []byte("#!/bin/sh\necho real\n")
+	realPath := filepath.Join(binDir, "claude-real")
+	if err := os.WriteFile(realPath, realContent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("PATH", binDir)
+
+	paths, err := config.Detect("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := providers.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.File{
+		Version:           1,
+		ProviderOverrides: map[string]config.ProviderOverride{},
+		OpenRouterAliases: map[string]string{},
+		CustomProviders:   map[string]config.CustomProvider{},
+	}
+	output := &ui.Output{Stdout: io.Discard, Stderr: io.Discard, Format: ui.FormatHuman}
+
+	code, err := runInstall(context.Background(), Context{
+		Paths:   paths,
+		Config:  cfg,
+		Secrets: config.Secrets{},
+		Catalog: catalog,
+		Output:  output,
+	})
+	if err != nil {
+		t.Fatalf("runInstall() error = %v", err)
+	}
+	if code != 0 {
+		t.Fatalf("runInstall() code = %d, want 0", code)
+	}
+
+	if !launchers.IsClotherShim(filepath.Join(binDir, "claude")) {
+		t.Fatal("expected $BinDir/claude to remain a Clother shim with no flags")
+	}
+	got, err := os.ReadFile(realPath)
+	if err != nil {
+		t.Fatalf("expected claude-real to still exist: %v", err)
+	}
+	if string(got) != string(realContent) {
+		t.Fatalf("claude-real content changed: got %q, want %q", got, realContent)
+	}
+}
+
+// New behavior: --no-claude-shim removes an existing Clother shim and
+// restores the preserved real claude back into BinDir/claude, the same
+// outcome as `clother uninstall`'s restore step.
+func TestRunInstallNoClaudeShimRestoresRealClaude(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need elevated privileges on windows")
+	}
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	binDir := filepath.Join(root, "bin")
+
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	t.Setenv("CLOTHER_BIN", binDir)
+	t.Setenv("CLOTHER_SKIP_SELF_UPDATE", "1")
+
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "clother"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	claudePath := filepath.Join(binDir, "claude")
+	if err := os.Symlink("clother", claudePath); err != nil {
+		t.Fatal(err)
+	}
+	realContent := []byte("#!/bin/sh\necho real\n")
+	realPath := filepath.Join(binDir, "claude-real")
+	if err := os.WriteFile(realPath, realContent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("PATH", binDir)
+
+	paths, err := config.Detect("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := providers.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.File{
+		Version:           1,
+		ProviderOverrides: map[string]config.ProviderOverride{},
+		OpenRouterAliases: map[string]string{},
+		CustomProviders:   map[string]config.CustomProvider{},
+	}
+	output := &ui.Output{Stdout: io.Discard, Stderr: io.Discard, Format: ui.FormatHuman}
+
+	code, err := runInstall(context.Background(), Context{
+		Paths:   paths,
+		Config:  cfg,
+		Secrets: config.Secrets{},
+		Catalog: catalog,
+		Output:  output,
+		Options: cli.Options{NoClaudeShim: true},
+	})
+	if err != nil {
+		t.Fatalf("runInstall() error = %v", err)
+	}
+	if code != 0 {
+		t.Fatalf("runInstall() code = %d, want 0", code)
+	}
+
+	info, err := os.Lstat(claudePath)
+	if err != nil {
+		t.Fatalf("claude should be restored: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("restored claude should be a regular file, not a symlink")
+	}
+	got, err := os.ReadFile(claudePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(realContent) {
+		t.Fatalf("restored claude content = %q, want %q", got, realContent)
+	}
+	if _, err := os.Lstat(realPath); !os.IsNotExist(err) {
+		t.Fatalf("claude-real should be gone after restore, stat err = %v", err)
+	}
+}
+
+// Companion to TestRunInstallSkipsShimWhenNoRealClaudeFound: with no flags
+// and no claude anywhere on PATH or preserved as claude-real, runInstall
+// must not create a claude shim pointing at nothing.
+func TestRunInstallDefaultNoClaudeAnywhereSkipsShim(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	binDir := filepath.Join(root, "bin")
+	emptyPathDir := filepath.Join(root, "empty-path")
+
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	t.Setenv("CLOTHER_BIN", binDir)
+	t.Setenv("CLOTHER_SKIP_SELF_UPDATE", "1")
+
+	if err := os.MkdirAll(emptyPathDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", emptyPathDir)
+
+	paths, err := config.Detect("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := providers.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.File{
+		Version:           1,
+		ProviderOverrides: map[string]config.ProviderOverride{},
+		OpenRouterAliases: map[string]string{},
+		CustomProviders:   map[string]config.CustomProvider{},
+	}
+	output := &ui.Output{Stdout: io.Discard, Stderr: io.Discard, Format: ui.FormatHuman}
+
+	code, err := runInstall(context.Background(), Context{
+		Paths:   paths,
+		Config:  cfg,
+		Secrets: config.Secrets{},
+		Catalog: catalog,
+		Output:  output,
+	})
+	if err != nil {
+		t.Fatalf("runInstall() error = %v", err)
+	}
+	if code != 0 {
+		t.Fatalf("runInstall() code = %d, want 0", code)
+	}
+
+	if _, err := os.Lstat(filepath.Join(binDir, "claude")); !os.IsNotExist(err) {
+		t.Fatalf("claude shim should be skipped when no real claude is found, stat err = %v", err)
 	}
 }
