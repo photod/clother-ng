@@ -700,10 +700,10 @@ func TestRunInstallNoClaudeShimRestoresRealClaude(t *testing.T) {
 }
 
 // Bug: syncClaudeShim's --no-claude-shim path calls restoreRealClaude, which
-// only warns on failure instead of returning an error. When the restore step
-// cannot actually remove the shim (e.g. a read-only BinDir), syncClaudeShim
-// still reports success by returning nil, silently leaving the shim in
-// place instead of surfacing the failure to the caller.
+// used to only warn on failure instead of returning an error. When the
+// restore step cannot actually remove the shim (e.g. a read-only BinDir),
+// syncClaudeShim must surface that failure to the caller instead of
+// reporting success and silently leaving the shim in place.
 //
 // This calls the unexported syncClaudeShim helper directly (not runInstall)
 // so the test cannot pass vacuously: runInstall also writes into BinDir
@@ -712,8 +712,9 @@ func TestRunInstallNoClaudeShimRestoresRealClaude(t *testing.T) {
 // reason and the assertion would pass without ever exercising the restore
 // failure this test targets.
 //
-// FAILS today: syncClaudeShim returns nil even though the read-only BinDir
-// makes os.Remove(shim) inside restoreRealClaude fail.
+// syncClaudeShim returns a non-nil error here: the read-only BinDir makes
+// os.Remove(shim) inside restoreRealClaude fail, and that failure must
+// propagate.
 func TestSyncClaudeShimReturnsErrorWhenRestoreFails(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("directory permission bits do not block removal the same way on windows")
@@ -748,6 +749,65 @@ func TestSyncClaudeShimReturnsErrorWhenRestoreFails(t *testing.T) {
 	execPath := filepath.Join(binDir, "clother")
 	if err := syncClaudeShim(ctx, execPath, false); err == nil {
 		t.Fatal("syncClaudeShim() error = nil, want a non-nil error: the read-only BinDir must make the shim restore fail visibly")
+	}
+}
+
+// New behavior: an explicit --claude-shim, unlike the warn-and-continue
+// default, must fail loudly when no real claude can be found at all, so a
+// user who asked for the shim learns immediately instead of getting no shim
+// and only a warning.
+func TestSyncClaudeShimExplicitFlagErrorsWhenNoRealClaudeFound(t *testing.T) {
+	home := t.TempDir()
+	emptyPathDir := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", emptyPathDir)
+
+	var out bytes.Buffer
+	ctx := Context{
+		Paths:   config.Paths{BinDir: ""},
+		Output:  &ui.Output{Stdout: &out, Stderr: &out, Format: ui.FormatHuman},
+		Options: cli.Options{ClaudeShim: true},
+	}
+
+	if err := syncClaudeShim(ctx, filepath.Join(emptyPathDir, "clother"), false); err == nil {
+		t.Fatal("syncClaudeShim() error = nil, want a non-nil error: an explicit --claude-shim with no real claude found must fail, not warn-and-continue")
+	}
+}
+
+// Companion to TestSyncClaudeShimExplicitFlagErrorsWhenNoRealClaudeFound:
+// without an explicit flag, an existing Clother shim in BinDir is kept as
+// is, warning rather than erroring, when no real claude can be found.
+func TestSyncClaudeShimWithoutFlagWarnsWhenNoRealClaudeFound(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need elevated privileges on windows")
+	}
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	binDir := filepath.Join(root, "bin")
+	emptyPathDir := filepath.Join(root, "empty-path")
+	for _, dir := range []string{home, binDir, emptyPathDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "clother"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("clother", filepath.Join(binDir, "claude")); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", emptyPathDir)
+
+	var out bytes.Buffer
+	ctx := Context{
+		Paths:  config.Paths{BinDir: binDir},
+		Output: &ui.Output{Stdout: &out, Stderr: &out, Format: ui.FormatHuman},
+	}
+
+	if err := syncClaudeShim(ctx, filepath.Join(binDir, "clother"), false); err != nil {
+		t.Fatalf("syncClaudeShim() error = %v, want nil (warn-and-continue without an explicit flag)", err)
 	}
 }
 

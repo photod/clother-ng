@@ -7,8 +7,8 @@ import (
 	"github.com/jolehuit/clother/internal/providers"
 )
 
-// Issue: fable and subagent tier overrides are silently ignored by Resolve
-// and StalePins, even though config.TierModels carries FableModel and
+// Resolve and StalePins must honor fable and subagent tier overrides, not
+// silently ignore them, since config.TierModels carries FableModel and
 // SubagentModel.
 
 func TestResolveFableOverrideAppliesOnlyFableTier(t *testing.T) {

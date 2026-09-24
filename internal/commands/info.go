@@ -44,7 +44,7 @@ func runInfo(_ context.Context, c Context, args []string) (int, error) {
 		fmt.Fprintf(c.Output.Stdout, "Subagents:   %s\n", subagent)
 	}
 	if len(stale) > 0 {
-		fmt.Fprintf(c.Output.Stdout, "Stale:       %s (not in the current catalog; run `clother config %s` to reset)\n", profiles.FormatStalePins(stale), target.Profile)
+		fmt.Fprintf(c.Output.Stdout, "Stale:       %s (not in Clother's bundled catalog; run `clother config %s` to reset)\n", profiles.FormatStalePins(stale), target.Profile)
 	}
 	if target.SecretKey != "" {
 		status := "configured"

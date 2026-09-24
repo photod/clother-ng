@@ -7,9 +7,9 @@ import (
 	"github.com/jolehuit/clother/internal/providers"
 )
 
-// Issue: TierModels grew FableModel and SubagentModel, but Map() and
-// trimmed() still only know about opus/sonnet/haiku, so the fable alias and
-// CLAUDE_CODE_SUBAGENT_MODEL can never be wired through a config file.
+// TierModels carries FableModel and SubagentModel alongside opus/sonnet/
+// haiku, and Map() and trimmed() must both know about them, so the fable
+// alias and CLAUDE_CODE_SUBAGENT_MODEL can be wired through a config file.
 
 func TestTierModelsMapIncludesFableAndSubagent(t *testing.T) {
 	t.Parallel()

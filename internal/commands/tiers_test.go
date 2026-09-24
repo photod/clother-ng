@@ -212,9 +212,10 @@ func tierPromptDefault(t *testing.T, out, label string) string {
 // prompt must default to that same "no mapping" state, not to the catalog's
 // now-irrelevant k3-256k.
 //
-// FAILS today: baselineTiers always uses the catalog subagent value
-// (provider.ModelTiers["subagent"]) regardless of the pinned model, so the
-// Subagent prompt still shows "[k3-256k]" as its default.
+// baselineTiers resolves the pinned model through profiles.Resolve before
+// reading EffectiveTiers, so it picks up this same drop of the catalog
+// subagent mapping, and the Subagent prompt never shows the now-irrelevant
+// "[k3-256k]" as its default.
 func TestConfigBuiltinSubagentPromptDefaultDropsWhenModelIsPinned(t *testing.T) {
 	input := strings.Join([]string{"", "2", "y", "", "", "", "", ""}, "\n") + "\n"
 	ctx, cfg, stdout := newTiersTestContext(t, input)
@@ -261,8 +262,8 @@ func TestConfigBuiltinSubagentPromptDefaultDropsWhenModelIsPinned(t *testing.T) 
 
 // General case: with no pin at all, the bracketed defaults printed for
 // Opus, Sonnet, Haiku and Fable must equal what launch resolves those tiers
-// to. May pass today: zai's catalog has no "subagent" entry, so this test
-// does not exercise the bug above, only that the non-subagent tiers stay
+// to. zai's catalog has no "subagent" entry, so this test does not cover the
+// subagent-drop case above; it only checks that the non-subagent tiers stay
 // correct.
 func TestConfigBuiltinPerTierPromptDefaultsMatchEffectiveTiersWithoutPin(t *testing.T) {
 	input := strings.Join([]string{"", "", "y", "", "", "", "", ""}, "\n") + "\n"
@@ -306,9 +307,9 @@ func TestConfigBuiltinPerTierPromptDefaultsMatchEffectiveTiersWithoutPin(t *test
 // longer offers should not be re-stored just because Enter defaulted to it,
 // and the prompt output should call out that the pin is stale.
 //
-// FAILS today: promptCatalogTiers treats any pinned tier value as a valid
-// default and keeps it verbatim when the answer matches the default, and
-// nothing in the prompt output mentions staleness.
+// promptCatalogTiers checks each pinned tier value against
+// profiles.ProviderStalePins: a stale value is shown but not offered as the
+// default, so Enter resets it, and the prompt output names it as stale.
 func TestConfigBuiltinPerTierPromptsResetsStaleTierPin(t *testing.T) {
 	input := strings.Join([]string{"", "", "", "", "", "", "", ""}, "\n") + "\n"
 	preset := config.ProviderOverride{TierModels: config.TierModels{HaikuModel: "glm-4.7"}}
@@ -328,9 +329,9 @@ func TestConfigBuiltinPerTierPromptsResetsStaleTierPin(t *testing.T) {
 // The "Map tiers separately?" confirm prompt must warn that declining it
 // clears any tiers already pinned explicitly, when such tiers exist.
 //
-// FAILS today: the confirm label is the fixed string "Map tiers separately?
-// (Opus, Sonnet, Haiku, Fable, Subagent)" regardless of whether explicit
-// tiers exist, and never mentions clearing.
+// promptCatalogTiers swaps in a label that says so whenever the override
+// already has an explicit tier mapping, instead of always printing the fixed
+// "Map tiers separately? (Opus, Sonnet, Haiku, Fable, Subagent)" string.
 func TestConfigBuiltinTierConfirmMentionsClearingWhenTiersExist(t *testing.T) {
 	input := strings.Join([]string{"", "", "n"}, "\n") + "\n"
 	preset := config.ProviderOverride{TierModels: config.TierModels{OpusModel: "glm-5.3"}}
@@ -338,5 +339,26 @@ func TestConfigBuiltinTierConfirmMentionsClearingWhenTiersExist(t *testing.T) {
 
 	if !strings.Contains(out, "clears") {
 		t.Fatalf("stdout does not mention that declining clears the existing tier mappings, got:\n%s", out)
+	}
+}
+
+// The "Map tiers separately?" confirm label must name which tier is already
+// pinned and to what (e.g. "opus=glm-5.3"), printed before the per-tier
+// prompts that follow it.
+func TestConfigBuiltinTierConfirmLabelNamesPinnedTiers(t *testing.T) {
+	input := strings.Join([]string{"", "", "y", "", "", "", "", ""}, "\n") + "\n"
+	preset := config.ProviderOverride{TierModels: config.TierModels{OpusModel: "glm-5.3"}}
+	_, _, out := runZaiTierScenario(t, input, preset, true)
+
+	tierPromptIdx := strings.Index(out, "Opus model [")
+	if tierPromptIdx < 0 {
+		t.Fatalf("stdout does not contain the Opus model tier prompt, got:\n%s", out)
+	}
+	pinnedIdx := strings.Index(out, "opus=glm-5.3")
+	if pinnedIdx < 0 {
+		t.Fatalf("stdout does not name the pinned tier opus=glm-5.3, got:\n%s", out)
+	}
+	if pinnedIdx > tierPromptIdx {
+		t.Fatalf("\"opus=glm-5.3\" appears after the first tier prompt, want it named before it, got:\n%s", out)
 	}
 }

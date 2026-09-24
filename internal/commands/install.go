@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -138,6 +139,9 @@ func syncClaudeShim(c Context, execPath string, isHomebrew bool) error {
 		return nil
 	}
 	realClaude, err := runtime.FindRealClaude(c.Paths)
+	if err != nil && c.Options.ClaudeShim {
+		return fmt.Errorf("--claude-shim needs Claude Code installed: %w", err)
+	}
 	if err != nil {
 		if launchers.IsClotherShim(filepath.Join(c.Paths.BinDir, "claude")) {
 			c.Output.Warn("claude not found; the existing `claude` shim was left as is. Run `clother install` again after installing Claude Code")

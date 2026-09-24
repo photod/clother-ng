@@ -142,7 +142,7 @@ func configBuiltin(c Context, provider providers.Provider) (int, error) {
 		if override.Model != "" {
 			pinned := strings.TrimSpace(override.Model)
 			if isStaleModelPin(provider, pinned) {
-				fmt.Fprintf(c.Output.Stdout, "Current pin:     %s (stale: not in the current catalog; Enter resets it)\n", pinned)
+				fmt.Fprintf(c.Output.Stdout, "Current pin:     %s (stale: not in Clother's bundled catalog; Enter resets it)\n", pinned)
 			} else {
 				fmt.Fprintf(c.Output.Stdout, "Current pin:     %s (\"-\" resets to the catalog default)\n", pinned)
 				defaultValue = pinned
@@ -154,6 +154,9 @@ func configBuiltin(c Context, provider providers.Provider) (int, error) {
 		}
 		if strings.TrimSpace(answer) == "-" {
 			answer = provider.DefaultModel
+		}
+		if err := validateModelChoice(answer, provider.ModelChoices); err != nil {
+			return 1, err
 		}
 		answer = resolveModelChoice(answer, provider.ModelChoices)
 		if answer != "" && answer != provider.DefaultModel {
@@ -237,7 +240,7 @@ func promptCatalogTiers(c Context, provider providers.Provider, model string, cu
 	label := "Map tiers separately? (Opus, Sonnet, Haiku, Fable, Subagent)"
 	hasTiers := len(current.Map()) > 0
 	if hasTiers {
-		label = "Map tiers separately? (no clears the current tier mappings)"
+		label = fmt.Sprintf("Map tiers separately? (no clears %s)", formatTierModels(current))
 	}
 	ok, err := c.Prompt.Confirm(label, hasTiers)
 	if err != nil || !ok {
@@ -264,7 +267,7 @@ func promptCatalogTiers(c Context, provider providers.Provider, model string, cu
 		defaultValue := baseline[tier.name]
 		if value := explicit[tier.name]; value != "" {
 			if stale[tier.name] {
-				fmt.Fprintf(c.Output.Stdout, "%s pin %s is stale: not in the current catalog; Enter resets it\n", tier.label, value)
+				fmt.Fprintf(c.Output.Stdout, "%s pin %s is stale: not in Clother's bundled catalog; Enter resets it\n", tier.label, value)
 			} else {
 				defaultValue = value
 			}
@@ -277,11 +280,26 @@ func promptCatalogTiers(c Context, provider providers.Provider, model string, cu
 		if answer == "-" {
 			continue
 		}
+		if err := validateModelChoice(answer, provider.ModelChoices); err != nil {
+			return current, err
+		}
 		if answer = resolveModelChoice(answer, provider.ModelChoices); answer != baseline[tier.name] {
 			*tier.field = answer
 		}
 	}
 	return out, nil
+}
+
+// formatTierModels renders explicit tiers as "opus=a, haiku=b" in tier order.
+func formatTierModels(tiers config.TierModels) string {
+	mapped := tiers.Map()
+	var parts []string
+	for _, tier := range []string{providers.TierOpus, providers.TierSonnet, providers.TierHaiku, providers.TierFable, providers.TierSubagent} {
+		if model := mapped[tier]; model != "" {
+			parts = append(parts, tier+"="+model)
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 // baselineTiers is what each tier resolves to at launch with the given model
@@ -465,6 +483,16 @@ func defaultAliasName(model string) string {
 		name = strings.ReplaceAll(name, "--", "-")
 	}
 	return strings.Trim(name, "-")
+}
+
+// validateModelChoice rejects a numeric answer outside the listed choices, so a
+// mistyped number is not stored as a model ID.
+func validateModelChoice(answer string, choices []providers.ModelChoice) error {
+	idx, err := strconv.Atoi(strings.TrimSpace(answer))
+	if err != nil || (idx >= 1 && idx <= len(choices)) {
+		return nil
+	}
+	return fmt.Errorf("no model choice %d (choose 1-%d or type a model ID)", idx, len(choices))
 }
 
 func resolveModelChoice(answer string, choices []providers.ModelChoice) string {

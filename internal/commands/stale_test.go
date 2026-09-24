@@ -86,6 +86,35 @@ func TestInfoHumanFormatShowsStaleLine(t *testing.T) {
 	}
 }
 
+// The Stale: line must call the reference catalog "bundled" (the one
+// shipped with Clother), not some other, unspecified "current" catalog.
+func TestInfoHumanFormatStaleLineMentionsBundledCatalog(t *testing.T) {
+	ctx, cfg, stdout := newStaleTestContext(t, "")
+	cfg.ProviderOverrides["zai"] = config.ProviderOverride{Model: "glm-5.1"}
+
+	code, err := runInfo(context.Background(), ctx, []string{"zai"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 {
+		t.Fatalf("runInfo() code = %d, want 0", code)
+	}
+
+	var staleLine string
+	for _, line := range strings.Split(stdout.String(), "\n") {
+		if strings.HasPrefix(line, "Stale:") {
+			staleLine = line
+			break
+		}
+	}
+	if staleLine == "" {
+		t.Fatalf("stdout has no Stale: line, got:\n%s", stdout.String())
+	}
+	if !strings.Contains(staleLine, "bundled catalog") {
+		t.Fatalf("Stale: line = %q, want it to mention \"bundled catalog\"", staleLine)
+	}
+}
+
 func TestInfoHumanFormatNoStaleLineWhenClean(t *testing.T) {
 	ctx, _, stdout := newStaleTestContext(t, "")
 

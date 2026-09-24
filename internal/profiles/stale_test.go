@@ -8,8 +8,8 @@ import (
 	"github.com/jolehuit/clother/internal/providers"
 )
 
-// Issue: a pinned model the catalog no longer offers ("stale pin") is never
-// surfaced anywhere, so the user keeps launching a provider with a model ID
+// A pinned model the catalog no longer offers ("stale pin") must be
+// surfaced, so the user is not left launching a provider with a model ID
 // the backend silently reroutes or rejects.
 
 func TestStalePinsFlagsUnknownModel(t *testing.T) {
@@ -179,6 +179,49 @@ func TestStalePinsEmptyForUnknownProfile(t *testing.T) {
 	}
 }
 
+// ProviderStalePins must not bail out early just because ModelChoices is
+// empty: a provider that still declares a DefaultModel and/or ModelTiers has
+// known models to check a pin against, even without an explicit choices
+// list.
+func TestProviderStalePinsFlagsPinOutsideDefaultAndTiersWithoutModelChoices(t *testing.T) {
+	t.Parallel()
+
+	provider := providers.Provider{
+		ID:           "x",
+		DefaultModel: "m1",
+		ModelTiers:   map[string]string{"opus": "m2"},
+	}
+	override := config.ProviderOverride{Model: "zzz"}
+
+	pins := ProviderStalePins(provider, override)
+	want := []StalePin{{Field: "model", Model: "zzz"}}
+	if len(pins) != len(want) {
+		t.Fatalf("ProviderStalePins() = %+v, want %+v", pins, want)
+	}
+	for i := range want {
+		if pins[i] != want[i] {
+			t.Fatalf("ProviderStalePins()[%d] = %+v, want %+v (full: %+v)", i, pins[i], want[i], pins)
+		}
+	}
+}
+
+// Companion: a provider with no DefaultModel, no ModelTiers and no
+// ModelChoices at all has nothing to check a pin against, so it must never
+// flag one.
+func TestProviderStalePinsEmptyForProviderWithNoCatalogModelInfo(t *testing.T) {
+	t.Parallel()
+
+	provider := providers.Provider{ID: "y"}
+	override := config.ProviderOverride{
+		Model:      "anything",
+		TierModels: config.TierModels{OpusModel: "whatever"},
+	}
+
+	if pins := ProviderStalePins(provider, override); len(pins) != 0 {
+		t.Fatalf("ProviderStalePins() = %+v, want none for a provider with no DefaultModel, ModelTiers or ModelChoices", pins)
+	}
+}
+
 func TestStaleWarningEmptyWithoutPins(t *testing.T) {
 	t.Parallel()
 
@@ -207,5 +250,19 @@ func TestStaleWarningMentionsPinCommandAndCatalog(t *testing.T) {
 	}
 	if !strings.Contains(msg, "catalog") {
 		t.Fatalf("StaleWarning() = %q, want it to mention the catalog", msg)
+	}
+}
+
+// The catalog referenced here is the one Clother ships (bundled with the
+// binary), not some other, unspecified "current" catalog; the wording must
+// say so.
+func TestStaleWarningMentionsBundledCatalog(t *testing.T) {
+	t.Parallel()
+
+	pins := []StalePin{{Field: "model", Model: "glm-5.1"}}
+	msg := StaleWarning("zai", pins)
+
+	if !strings.Contains(msg, "bundled catalog") {
+		t.Fatalf("StaleWarning() = %q, want it to mention \"bundled catalog\"", msg)
 	}
 }

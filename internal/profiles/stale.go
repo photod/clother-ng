@@ -17,8 +17,8 @@ type StalePin struct {
 
 // StalePins lists the pinned models of a catalog provider that are not among
 // its catalog model IDs (default model, tier models and model choices).
-// Providers without a model list (local, OpenRouter aliases, custom) never
-// have stale pins.
+// Providers without any catalog model (local, OpenRouter aliases, custom)
+// never have stale pins.
 func StalePins(profile string, catalog providers.Catalog, cfg *config.File) []StalePin {
 	provider, ok := catalog.Get(profile)
 	if !ok || cfg == nil {
@@ -33,15 +33,21 @@ func StalePins(profile string, catalog providers.Catalog, cfg *config.File) []St
 
 // ProviderStalePins is StalePins for one catalog provider and its override.
 func ProviderStalePins(provider providers.Provider, override config.ProviderOverride) []StalePin {
-	if len(provider.ModelChoices) == 0 {
+	// Local servers serve whatever the user loaded; any ID is legitimate.
+	if provider.Family == providers.FamilyLocal {
 		return nil
 	}
-	known := map[string]bool{provider.DefaultModel: true}
+	known := map[string]bool{}
 	for _, model := range provider.ModelTiers {
 		known[model] = true
 	}
 	for _, choice := range provider.ModelChoices {
 		known[choice.ID] = true
+	}
+	known[provider.DefaultModel] = true
+	delete(known, "")
+	if len(known) == 0 {
+		return nil
 	}
 	var pins []StalePin
 	for _, pin := range []StalePin{
@@ -66,7 +72,7 @@ func StaleWarning(profile string, pins []StalePin) string {
 	if len(pins) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("clother: %s pins %s, not in the current catalog; run `clother config %s` to reset", profile, FormatStalePins(pins), profile)
+	return fmt.Sprintf("clother: %s pins %s, not in Clother's bundled catalog; run `clother config %s` to reset", profile, FormatStalePins(pins), profile)
 }
 
 // FormatStalePins renders pins as "model=glm-5.1, haiku=glm-4.7".

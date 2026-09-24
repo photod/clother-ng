@@ -82,6 +82,9 @@ func Parse(args []string) (Parsed, error) {
 		parsed.Command = positional[0]
 		parsed.Args = positional[1:]
 	}
+	if (parsed.Options.ClaudeShim || parsed.Options.NoClaudeShim) && parsed.Command != "install" {
+		return Parsed{}, fmt.Errorf("--claude-shim and --no-claude-shim only apply to install")
+	}
 	return parsed, nil
 }
 

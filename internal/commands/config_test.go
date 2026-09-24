@@ -113,6 +113,68 @@ func TestConfigBuiltinAllowsModelOverrideWithoutCatalogChoices(t *testing.T) {
 	}
 }
 
+// A numeric answer that does not index any of the provider's model choices
+// must be rejected, not stored verbatim as a literal model ID.
+func TestConfigBuiltinModelPromptRejectsOutOfRangeNumericAnswer(t *testing.T) {
+	ctx, cfg := newConfigTestContext(t, "\n9\nn\n")
+	ctx.Secrets["ZAI_API_KEY"] = "sk-test"
+
+	provider, ok := ctx.Catalog.Get("zai")
+	if !ok {
+		t.Fatal("zai provider missing from catalog")
+	}
+	if choices := len(provider.ModelChoices); choices == 0 || choices >= 9 {
+		t.Fatalf("zai has %d model choices, need fewer than 9 for \"9\" to be out of range", choices)
+	}
+
+	code, err := configBuiltin(ctx, provider)
+	if err == nil && code == 0 {
+		t.Fatal("configBuiltin() = (0, nil), want a non-nil error (or non-zero code) for an out-of-range numeric model answer")
+	}
+	if got := cfg.ProviderOverrides["zai"].Model; got == "9" {
+		t.Fatalf("ProviderOverrides[\"zai\"].Model = %q, want the out-of-range answer rejected, not stored", got)
+	}
+}
+
+// Same rejection at a per-tier prompt: an out-of-range numeric answer to the
+// opus tier prompt must not be stored either.
+func TestConfigBuiltinTierPromptRejectsOutOfRangeNumericAnswer(t *testing.T) {
+	ctx, cfg := newConfigTestContext(t, "\n\ny\n9\n\n\n\n\n")
+	ctx.Secrets["ZAI_API_KEY"] = "sk-test"
+
+	provider, ok := ctx.Catalog.Get("zai")
+	if !ok {
+		t.Fatal("zai provider missing from catalog")
+	}
+
+	code, err := configBuiltin(ctx, provider)
+	if err == nil && code == 0 {
+		t.Fatal("configBuiltin() = (0, nil), want a non-nil error (or non-zero code) for an out-of-range numeric opus tier answer")
+	}
+	if got := cfg.ProviderOverrides["zai"].OpusModel; got == "9" {
+		t.Fatalf("ProviderOverrides[\"zai\"].OpusModel = %q, want the out-of-range answer rejected, not stored", got)
+	}
+}
+
+// A literal model ID that happens to match a real catalog entry must still
+// be accepted at the Model prompt.
+func TestConfigBuiltinModelPromptAcceptsKnownModelIDAnswer(t *testing.T) {
+	ctx, cfg := newConfigTestContext(t, "\nglm-5.3\nn\n")
+	ctx.Secrets["ZAI_API_KEY"] = "sk-test"
+
+	provider, ok := ctx.Catalog.Get("zai")
+	if !ok {
+		t.Fatal("zai provider missing from catalog")
+	}
+
+	if _, err := configBuiltin(ctx, provider); err != nil {
+		t.Fatalf("configBuiltin() error = %v, want nil for a known model ID answer", err)
+	}
+	if got := cfg.ProviderOverrides["zai"].Model; got != "glm-5.3" {
+		t.Fatalf("ProviderOverrides[\"zai\"].Model = %q, want glm-5.3", got)
+	}
+}
+
 func TestConfigBuiltinLocalProviderStoresRemoteBaseURL(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("HOME", root)
