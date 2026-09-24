@@ -18,15 +18,21 @@ type TierModels struct {
 	OpusModel   string `json:"opus_model,omitempty"`
 	SonnetModel string `json:"sonnet_model,omitempty"`
 	HaikuModel  string `json:"haiku_model,omitempty"`
+	// FableModel and SubagentModel map Claude Code's fable alias and the
+	// subagent model (CLAUDE_CODE_SUBAGENT_MODEL).
+	FableModel    string `json:"fable_model,omitempty"`
+	SubagentModel string `json:"subagent_model,omitempty"`
 }
 
 // Map returns the non-empty tier mappings keyed by tier name.
 func (t TierModels) Map() map[string]string {
 	out := map[string]string{}
 	for tier, model := range map[string]string{
-		providers.TierOpus:   t.OpusModel,
-		providers.TierSonnet: t.SonnetModel,
-		providers.TierHaiku:  t.HaikuModel,
+		providers.TierOpus:     t.OpusModel,
+		providers.TierSonnet:   t.SonnetModel,
+		providers.TierHaiku:    t.HaikuModel,
+		providers.TierFable:    t.FableModel,
+		providers.TierSubagent: t.SubagentModel,
 	} {
 		if model = strings.TrimSpace(model); model != "" {
 			out[tier] = model
@@ -37,9 +43,11 @@ func (t TierModels) Map() map[string]string {
 
 func (t TierModels) trimmed() TierModels {
 	return TierModels{
-		OpusModel:   strings.TrimSpace(t.OpusModel),
-		SonnetModel: strings.TrimSpace(t.SonnetModel),
-		HaikuModel:  strings.TrimSpace(t.HaikuModel),
+		OpusModel:     strings.TrimSpace(t.OpusModel),
+		SonnetModel:   strings.TrimSpace(t.SonnetModel),
+		HaikuModel:    strings.TrimSpace(t.HaikuModel),
+		FableModel:    strings.TrimSpace(t.FableModel),
+		SubagentModel: strings.TrimSpace(t.SubagentModel),
 	}
 }
 

@@ -287,8 +287,35 @@ func TestConfigLocalProviderStoresTierModels(t *testing.T) {
 	}
 }
 
+// Issue: local backends also map the fable alias and CLAUDE_CODE_SUBAGENT_MODEL
+// per tier, alongside opus/sonnet/haiku.
+func TestConfigLocalProviderStoresFableAndSubagentTierModels(t *testing.T) {
+	ctx, cfg := newConfigTestContext(t, "\nqwen3.8-27b-mtp\nqwen3.8-27b-mtp\nqwopus3.6-27b-v2-mtp\nqwen3.6-35b-a3b-mtp\nqwen3.6-fable-mtp\nqwen3.6-subagent-mtp\n")
+	provider, _ := ctx.Catalog.Get("ollama")
+	if _, err := configBuiltin(ctx, provider); err != nil {
+		t.Fatal(err)
+	}
+	override := cfg.ProviderOverrides["ollama"]
+	want := config.ProviderOverride{
+		Model: "qwen3.8-27b-mtp",
+		TierModels: config.TierModels{
+			OpusModel:     "qwen3.8-27b-mtp",
+			SonnetModel:   "qwopus3.6-27b-v2-mtp",
+			HaikuModel:    "qwen3.6-35b-a3b-mtp",
+			FableModel:    "qwen3.6-fable-mtp",
+			SubagentModel: "qwen3.6-subagent-mtp",
+		},
+	}
+	if override != want {
+		t.Fatalf("override = %+v, want %+v", override, want)
+	}
+}
+
 func TestConfigCustomProviderStoresTierModels(t *testing.T) {
-	ctx, cfg := newConfigTestContext(t, "gateway\nhttps://gateway.example.com\nmodel-a\nmodel-a\nmodel-b\nmodel-c\nsk-gateway\n")
+	// Two extra blank lines (Enter) answer the new fable and subagent tier
+	// prompts promptTierModels asks after haiku, so "sk-gateway" still lands
+	// on the API key prompt that follows.
+	ctx, cfg := newConfigTestContext(t, "gateway\nhttps://gateway.example.com\nmodel-a\nmodel-a\nmodel-b\nmodel-c\n\n\nsk-gateway\n")
 	if _, err := configCustom(ctx); err != nil {
 		t.Fatal(err)
 	}

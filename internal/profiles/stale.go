@@ -9,7 +9,7 @@ import (
 )
 
 // StalePin is a model pinned in the user's config that the provider's catalog
-// no longer offers. Field is "model", "opus", "sonnet" or "haiku".
+// no longer offers. Field is "model" or a tier name.
 type StalePin struct {
 	Field string `json:"field"`
 	Model string `json:"model"`
@@ -49,6 +49,8 @@ func ProviderStalePins(provider providers.Provider, override config.ProviderOver
 		{Field: providers.TierOpus, Model: override.OpusModel},
 		{Field: providers.TierSonnet, Model: override.SonnetModel},
 		{Field: providers.TierHaiku, Model: override.HaikuModel},
+		{Field: providers.TierFable, Model: override.FableModel},
+		{Field: providers.TierSubagent, Model: override.SubagentModel},
 	} {
 		pin.Model = strings.TrimSpace(pin.Model)
 		if pin.Model != "" && !known[pin.Model] {

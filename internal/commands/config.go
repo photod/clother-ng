@@ -161,6 +161,9 @@ func configBuiltin(c Context, provider providers.Provider) (int, error) {
 		} else {
 			override.Model = ""
 		}
+		if override.TierModels, err = promptCatalogTiers(c, provider, override.Model, override.TierModels); err != nil {
+			return 1, err
+		}
 	case provider.Family == providers.FamilyLocal:
 		// Local servers expose arbitrary model IDs: a default and a mapping
 		// per tier let `/model opus|sonnet|haiku` pick backend models.
@@ -205,7 +208,7 @@ func promptOptional(c Context, label, current string) (string, error) {
 }
 
 func promptTierModels(c Context, current config.TierModels) (config.TierModels, error) {
-	fmt.Fprintln(c.Output.Stdout, "Model tiers (optional): the backend model `--model opus|sonnet|haiku` resolves to; empty uses the default model.")
+	fmt.Fprintln(c.Output.Stdout, "Model tiers (optional): the backend model `--model opus|sonnet|haiku|fable` resolves to, and the subagent model; empty uses the default model.")
 	var err error
 	out := config.TierModels{}
 	if out.OpusModel, err = promptOptional(c, "Opus model", current.OpusModel); err != nil {
@@ -217,7 +220,74 @@ func promptTierModels(c Context, current config.TierModels) (config.TierModels, 
 	if out.HaikuModel, err = promptOptional(c, "Haiku model", current.HaikuModel); err != nil {
 		return current, err
 	}
+	if out.FableModel, err = promptOptional(c, "Fable model", current.FableModel); err != nil {
+		return current, err
+	}
+	if out.SubagentModel, err = promptOptional(c, "Subagent model", current.SubagentModel); err != nil {
+		return current, err
+	}
 	return out, nil
+}
+
+// promptCatalogTiers lets a catalog provider map each Claude Code tier to its
+// own model. Each prompt defaults to what the tier gets without a mapping, and
+// only answers that differ from it are stored.
+func promptCatalogTiers(c Context, provider providers.Provider, model string, current config.TierModels) (config.TierModels, error) {
+	ok, err := c.Prompt.Confirm("Map tiers separately? (Opus, Sonnet, Haiku, Fable, Subagent)", len(current.Map()) > 0)
+	if err != nil || !ok {
+		return config.TierModels{}, err
+	}
+	baseline := baselineTiers(provider, model)
+	explicit := current.Map()
+	var out config.TierModels
+	for _, tier := range []struct {
+		name  string
+		label string
+		field *string
+	}{
+		{providers.TierOpus, "Opus model", &out.OpusModel},
+		{providers.TierSonnet, "Sonnet model", &out.SonnetModel},
+		{providers.TierHaiku, "Haiku model", &out.HaikuModel},
+		{providers.TierFable, "Fable model", &out.FableModel},
+		{providers.TierSubagent, "Subagent model", &out.SubagentModel},
+	} {
+		defaultValue := baseline[tier.name]
+		if value := explicit[tier.name]; value != "" {
+			defaultValue = value
+		}
+		answer, err := c.Prompt.Prompt(tier.label, defaultValue)
+		if err != nil {
+			return current, err
+		}
+		answer = strings.TrimSpace(answer)
+		if answer == "-" {
+			continue
+		}
+		if answer = resolveModelChoice(answer, provider.ModelChoices); answer != baseline[tier.name] {
+			*tier.field = answer
+		}
+	}
+	return out, nil
+}
+
+// baselineTiers is the tier mapping without explicit tiers: every tier follows
+// a pinned model, otherwise the catalog mapping with the default model filling
+// gaps and fable following opus.
+func baselineTiers(provider providers.Provider, model string) map[string]string {
+	tiers := map[string]string{providers.TierSubagent: provider.ModelTiers[providers.TierSubagent]}
+	for _, tier := range []string{providers.TierOpus, providers.TierSonnet, providers.TierHaiku, providers.TierFable} {
+		switch {
+		case model != "":
+			tiers[tier] = model
+		case provider.ModelTiers[tier] != "":
+			tiers[tier] = provider.ModelTiers[tier]
+		case tier == providers.TierFable:
+			tiers[tier] = tiers[providers.TierOpus]
+		default:
+			tiers[tier] = provider.DefaultModel
+		}
+	}
+	return tiers
 }
 
 // promptOptionalSecret stores, keeps or removes an optional credential. The
