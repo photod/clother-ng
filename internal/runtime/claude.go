@@ -50,10 +50,13 @@ func FindRealClaude(paths config.Paths) (string, error) {
 		if selfResolved != "" && samePath(candidate, selfResolved) {
 			continue
 		}
+		if isClotherBinary(candidate) {
+			continue
+		}
 		return candidate, nil
 	}
 	fallback := filepath.Join(paths.BinDir, "claude-real")
-	if info, err := os.Stat(fallback); err == nil && !info.IsDir() {
+	if info, err := os.Stat(fallback); err == nil && !info.IsDir() && !isClotherBinary(fallback) {
 		if selfResolved == "" || !samePath(fallback, selfResolved) {
 			return fallback, nil
 		}
@@ -133,7 +136,7 @@ func PreserveRealClaude(paths config.Paths, realClaudePath string) error {
 		return nil
 	}
 	defaultClaude := filepath.Join(paths.BinDir, "claude")
-	if !samePath(realClaudePath, defaultClaude) {
+	if !samePath(realClaudePath, defaultClaude) || isClotherBinary(defaultClaude) {
 		return nil
 	}
 
@@ -150,6 +153,12 @@ func PreserveRealClaude(paths config.Paths, realClaudePath string) error {
 		return err
 	}
 	return os.Rename(defaultClaude, preserved)
+}
+
+// isClotherBinary reports whether path resolves to a clother executable, i.e.
+// it is a Clother shim (possibly left by an older install) and not Claude.
+func isClotherBinary(path string) bool {
+	return filepath.Base(resolvedPath(path)) == "clother"
 }
 
 func resolvedPath(path string) string {

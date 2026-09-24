@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 
@@ -60,6 +61,14 @@ func runInstall(ctx context.Context, c Context) (int, error) {
 	}
 	if err := launchers.Sync(execPath, c.Paths, c.Catalog, c.Config, isHomebrew); err != nil {
 		return 1, err
+	}
+	if claudeErr == nil {
+		if err := launchers.InstallClaudeShim(c.Paths, launchers.SymlinkTarget(execPath, isHomebrew)); err != nil {
+			if !errors.Is(err, launchers.ErrClaudeNotShim) {
+				return 1, err
+			}
+			c.Output.Warn("left %s alone: it is not a Clother shim", filepath.Join(c.Paths.BinDir, "claude"))
+		}
 	}
 	for _, legacy := range []string{
 		filepath.Join(c.Paths.DataDir, "clother-full.sh"),

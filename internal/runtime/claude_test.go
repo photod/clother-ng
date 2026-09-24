@@ -3,6 +3,7 @@ package runtime
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/jolehuit/clother/internal/config"
@@ -147,6 +148,100 @@ func TestFindRealClaudeRecoversFromDanglingClaudeReal(t *testing.T) {
 	}
 }
 
+// Bug: FindRealClaude only skipped a PATH candidate named "claude" when it
+// resolved to the CURRENTLY RUNNING test executable. It must skip any
+// candidate that resolves to a Clother shim (a symlink whose target's base
+// name is "clother"), even when that shim is not the running binary -- e.g.
+// when `clother install` runs from a freshly downloaded binary and an old
+// shim is still sitting on PATH ahead of the real claude.
+func TestFindRealClaudeSkipsShimOnPathEvenWhenNotSelf(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks")
+	}
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	realDir := filepath.Join(root, "realdir")
+	home := filepath.Join(root, "home")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "clother"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("clother", filepath.Join(binDir, "claude")); err != nil {
+		t.Fatal(err)
+	}
+	realClaude := filepath.Join(realDir, "claude")
+	if err := os.WriteFile(realClaude, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+realDir)
+	t.Setenv("CLOTHER_BIN", binDir)
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+
+	paths, err := config.Detect("")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := FindRealClaude(paths)
+	if err != nil {
+		t.Fatalf("FindRealClaude() error = %v", err)
+	}
+	if got != realClaude {
+		t.Fatalf("FindRealClaude() = %q, want %q (a Clother shim earlier on PATH must be skipped)", got, realClaude)
+	}
+}
+
+// Companion to the PATH case above: the $BinDir/claude-real fallback must
+// also be skipped when it resolves to a Clother shim, not just to self.
+func TestFindRealClaudeSkipsShimFallback(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks")
+	}
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	home := filepath.Join(root, "home")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "clother"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("clother", filepath.Join(binDir, "claude")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("clother", filepath.Join(binDir, "claude-real")); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("PATH", binDir)
+	t.Setenv("CLOTHER_BIN", binDir)
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+
+	// HOME has no .local/share/claude/versions, so there is nothing for the
+	// newestInstalledClaude recovery path to find either.
+	paths, err := config.Detect("")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := FindRealClaude(paths)
+	if err == nil {
+		t.Fatalf("FindRealClaude() = %q, want error: both claude and claude-real are Clother shims", got)
+	}
+}
+
 func TestFindRealClaudeWithoutClaudeRealStillFails(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("HOME", root)
@@ -163,5 +258,67 @@ func TestFindRealClaudeWithoutClaudeRealStillFails(t *testing.T) {
 	// native installer, so the versions dir is not guessed at.
 	if _, err := FindRealClaude(config.Paths{BinDir: filepath.Join(root, "bin")}); err == nil {
 		t.Fatal("expected an error when neither PATH nor claude-real has claude")
+	}
+}
+
+// Bug: PreserveRealClaude assumed $BinDir/claude, whenever it equals the
+// resolved "real claude" path, is an actual Claude Code binary worth saving.
+// When that slot already holds a Clother shim (an install/upgrade running
+// against a stale shim left on PATH), PreserveRealClaude must leave it
+// alone: it must not rename the shim over an existing claude-real, which
+// would destroy the real preserved binary.
+func TestPreserveRealClaudeLeavesShimAndClaudeRealUntouched(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks")
+	}
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "clother"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	claudePath := filepath.Join(binDir, "claude")
+	if err := os.Symlink("clother", claudePath); err != nil {
+		t.Fatal(err)
+	}
+	realPath := filepath.Join(binDir, "claude-real")
+	if err := os.WriteFile(realPath, []byte("real"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := PreserveRealClaude(config.Paths{BinDir: binDir}, claudePath); err != nil {
+		t.Fatalf("PreserveRealClaude() error = %v", err)
+	}
+
+	info, err := os.Lstat(claudePath)
+	if err != nil {
+		t.Fatalf("claude should still exist: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("claude should remain a symlink (the Clother shim), not be renamed away")
+	}
+	target, err := os.Readlink(claudePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != "clother" {
+		t.Fatalf("claude symlink target = %q, want %q", target, "clother")
+	}
+
+	realInfo, err := os.Lstat(realPath)
+	if err != nil {
+		t.Fatalf("claude-real should still exist: %v", err)
+	}
+	if realInfo.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("claude-real should remain a regular file, not become a symlink to the shim")
+	}
+	got, err := os.ReadFile(realPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "real" {
+		t.Fatalf("claude-real content = %q, want %q", got, "real")
 	}
 }

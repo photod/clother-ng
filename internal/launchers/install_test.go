@@ -3,6 +3,7 @@ package launchers
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/jolehuit/clother/internal/config"
@@ -47,7 +48,11 @@ func TestSyncCreatesBinaryAndLaunchers(t *testing.T) {
 	if err := Sync(execPath, paths, catalog, cfg, false); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"clother", "claude", "clother-zai", "clother-native", "clother-or-kimi", "clother-myprovider", "clother-or", "clother-custom"} {
+	// "claude" is deliberately excluded here: Sync must never create, remove or
+	// modify $BinDir/claude (see TestSyncCreatesNoClaudeWhenAbsent and friends
+	// below): that slot is now owned by launchers.InstallClaudeShim, called by
+	// the command layer, not by Sync itself.
+	for _, name := range []string{"clother", "clother-zai", "clother-native", "clother-or-kimi", "clother-myprovider", "clother-or", "clother-custom"} {
 		if _, err := os.Lstat(filepath.Join(paths.BinDir, name)); err != nil {
 			t.Fatalf("missing %s: %v", name, err)
 		}
@@ -103,8 +108,10 @@ func TestSyncHomebrewSkipsCopyAndUsesAbsoluteSymlinks(t *testing.T) {
 		t.Fatal("clother binary must not be copied into BinDir in Homebrew mode")
 	}
 
-	// provider symlinks must exist and point to the Homebrew binary
-	for _, name := range []string{"claude", "clother-zai", "clother-native", "clother-or", "clother-custom"} {
+	// provider symlinks must exist and point to the Homebrew binary. "claude"
+	// is deliberately excluded: Sync must never create, remove or modify
+	// $BinDir/claude (see TestSyncCreatesNoClaudeWhenAbsent and friends below).
+	for _, name := range []string{"clother-zai", "clother-native", "clother-or", "clother-custom"} {
 		link := filepath.Join(paths.BinDir, name)
 		target, err := os.Readlink(link)
 		if err != nil {
@@ -166,4 +173,133 @@ func TestSyncHomebrewSkipsDynamicProviderSymlinks(t *testing.T) {
 			t.Fatalf("gateway symlink %s must always be created: %v", name, err)
 		}
 	}
+}
+
+func newSyncTestFixture(t *testing.T) (execPath string, paths config.Paths, catalog providers.Catalog, cfg *config.File) {
+	t.Helper()
+	root := t.TempDir()
+	execPath = filepath.Join(root, "clother-bin")
+	if err := os.WriteFile(execPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var err error
+	catalog, err = providers.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg = &config.File{
+		Version:           1,
+		ProviderOverrides: map[string]config.ProviderOverride{},
+		OpenRouterAliases: map[string]string{},
+		CustomProviders:   map[string]config.CustomProvider{},
+	}
+	paths = config.Paths{
+		ConfigDir:       filepath.Join(root, "config"),
+		DataDir:         filepath.Join(root, "data"),
+		CacheDir:        filepath.Join(root, "cache"),
+		BinDir:          filepath.Join(root, "bin"),
+		ManifestFile:    filepath.Join(root, "data", "launchers.json"),
+		SessionPatchDir: filepath.Join(root, "data", "session-patches"),
+	}
+	if err := os.MkdirAll(paths.BinDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return execPath, paths, catalog, cfg
+}
+
+func assertGatewayLaunchersCreated(t *testing.T, paths config.Paths) {
+	t.Helper()
+	for _, name := range []string{"clother-or", "clother-custom"} {
+		if _, err := os.Lstat(filepath.Join(paths.BinDir, name)); err != nil {
+			t.Fatalf("gateway symlink %s must still be created: %v", name, err)
+		}
+	}
+}
+
+// Bug: Sync used to unconditionally remove and recreate $BinDir/claude, which
+// deletes a real Claude Code installation living at that path. Sync must
+// never create, remove or modify $BinDir/claude.
+func TestSyncLeavesRegularFileClaudeUntouched(t *testing.T) {
+	t.Parallel()
+
+	execPath, paths, catalog, cfg := newSyncTestFixture(t)
+	claudePath := filepath.Join(paths.BinDir, "claude")
+	content := []byte("#!/bin/sh\necho real\n")
+	if err := os.WriteFile(claudePath, content, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Sync(execPath, paths, catalog, cfg, false); err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := os.Lstat(claudePath)
+	if err != nil {
+		t.Fatalf("claude should still exist: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("claude should remain a regular file, not become a symlink")
+	}
+	got, err := os.ReadFile(claudePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(content) {
+		t.Fatalf("claude content changed: got %q, want %q", got, content)
+	}
+	assertGatewayLaunchersCreated(t, paths)
+}
+
+func TestSyncLeavesSymlinkClaudeUntouched(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need elevated privileges on windows")
+	}
+	t.Parallel()
+
+	execPath, paths, catalog, cfg := newSyncTestFixture(t)
+	root := filepath.Dir(paths.BinDir)
+	versionTarget := filepath.Join(root, "versions", "2.1.3")
+	if err := os.MkdirAll(filepath.Dir(versionTarget), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(versionTarget, []byte("#!/bin/sh\necho real\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	claudePath := filepath.Join(paths.BinDir, "claude")
+	if err := os.Symlink(versionTarget, claudePath); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Sync(execPath, paths, catalog, cfg, false); err != nil {
+		t.Fatal(err)
+	}
+
+	target, err := os.Readlink(claudePath)
+	if err != nil {
+		t.Fatalf("claude should still be a symlink: %v", err)
+	}
+	if target != versionTarget {
+		t.Fatalf("claude symlink target changed: got %q, want %q", target, versionTarget)
+	}
+	assertGatewayLaunchersCreated(t, paths)
+}
+
+func TestSyncCreatesNoClaudeWhenAbsent(t *testing.T) {
+	t.Parallel()
+
+	execPath, paths, catalog, cfg := newSyncTestFixture(t)
+	claudePath := filepath.Join(paths.BinDir, "claude")
+	if _, err := os.Lstat(claudePath); !os.IsNotExist(err) {
+		t.Fatalf("test fixture should start without claude, stat err = %v", err)
+	}
+
+	if err := Sync(execPath, paths, catalog, cfg, false); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Lstat(claudePath); !os.IsNotExist(err) {
+		t.Fatalf("Sync must not create claude when it was absent, stat err = %v", err)
+	}
+	assertGatewayLaunchersCreated(t, paths)
 }

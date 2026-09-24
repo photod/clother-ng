@@ -18,6 +18,9 @@ type Manifest struct {
 
 // Sync installs the clother binary and provider symlinks into paths.BinDir.
 //
+// Sync never touches $BinDir/claude; the claude shim is managed separately by
+// InstallClaudeShim so that config saves cannot clobber a real Claude Code.
+//
 // When skipCopy is false (normal install), the binary at execPath is copied to
 // paths.BinDir/clother and symlinks are created relative to it.
 //
@@ -29,10 +32,8 @@ func Sync(execPath string, paths config.Paths, catalog providers.Catalog, cfg *c
 		return err
 	}
 
-	symlinkTarget := "clother" // relative — works when binary lives in the same dir
-	if skipCopy {
-		symlinkTarget = execPath // absolute — points directly to the Homebrew binary
-	} else {
+	symlinkTarget := SymlinkTarget(execPath, skipCopy)
+	if !skipCopy {
 		destBinary := filepath.Join(paths.BinDir, "clother")
 		if err := copyExecutable(execPath, destBinary); err != nil {
 			return err
@@ -75,11 +76,6 @@ func Sync(execPath string, paths config.Paths, catalog providers.Catalog, cfg *c
 		if err := os.Symlink(symlinkTarget, link); err != nil {
 			return err
 		}
-	}
-	claudeShim := filepath.Join(paths.BinDir, "claude")
-	_ = os.Remove(claudeShim)
-	if err := os.Symlink(symlinkTarget, claudeShim); err != nil {
-		return err
 	}
 	return SaveManifest(paths.ManifestFile, Manifest{Launchers: launchers})
 }
