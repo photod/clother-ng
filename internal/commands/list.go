@@ -19,6 +19,7 @@ func runList(_ context.Context, c Context) (int, error) {
 			Name       string `json:"name"`
 			Command    string `json:"command"`
 			Configured bool   `json:"configured"`
+			Stale      bool   `json:"stale"`
 		}
 		payload := struct {
 			Profiles []item `json:"profiles"`
@@ -28,6 +29,7 @@ func runList(_ context.Context, c Context) (int, error) {
 				Name:       target.Profile,
 				Command:    "clother-" + target.Profile,
 				Configured: configured(target, c.Secrets),
+				Stale:      len(profiles.StalePins(target.Profile, c.Catalog, c.Config)) > 0,
 			})
 		}
 		data, _ := json.MarshalIndent(payload, "", "  ")
@@ -42,6 +44,9 @@ func runList(_ context.Context, c Context) (int, error) {
 			status := "configured"
 			if !configured(target, c.Secrets) {
 				status = "not configured"
+			}
+			if len(profiles.StalePins(target.Profile, c.Catalog, c.Config)) > 0 {
+				status += ", stale model pin"
 			}
 			fmt.Fprintf(c.Output.Stdout, "  %-18s %s\n", target.Profile, status)
 		}

@@ -119,6 +119,9 @@ func Run(ctx context.Context, args []string, argv0 string) (int, error) {
 		if err != nil {
 			return 1, err
 		}
+		if warning := profiles.StaleWarning(profile, profiles.StalePins(profile, catalog, cfg)); warning != "" {
+			fmt.Fprintln(os.Stderr, warning)
+		}
 		return commands.RunLauncher(ctx, paths, secrets, target, forwarded, launcherOptions.NoBanner)
 	}
 

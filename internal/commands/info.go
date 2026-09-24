@@ -19,11 +19,13 @@ func runInfo(_ context.Context, c Context, args []string) (int, error) {
 		return 1, err
 	}
 	tiers := profiles.EffectiveTiers(target)
+	stale := profiles.StalePins(target.Profile, c.Catalog, c.Config)
 	if c.Options.Format == "json" {
 		data, _ := json.MarshalIndent(struct {
 			profiles.Target
 			EffectiveTiers map[string]string
-		}{target, tiers}, "", "  ")
+			StalePins      []profiles.StalePin `json:",omitempty"`
+		}{target, tiers, stale}, "", "  ")
 		fmt.Fprintln(c.Output.Stdout, string(data))
 		return 0, nil
 	}
@@ -40,6 +42,9 @@ func runInfo(_ context.Context, c Context, args []string) (int, error) {
 	}
 	if subagent := tiers[providers.TierSubagent]; subagent != "" {
 		fmt.Fprintf(c.Output.Stdout, "Subagents:   %s\n", subagent)
+	}
+	if len(stale) > 0 {
+		fmt.Fprintf(c.Output.Stdout, "Stale:       %s (not in the current catalog; run `clother config %s` to reset)\n", profiles.FormatStalePins(stale), target.Profile)
 	}
 	if target.SecretKey != "" {
 		status := "configured"

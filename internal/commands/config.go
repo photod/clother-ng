@@ -10,6 +10,7 @@ import (
 
 	"github.com/jolehuit/clother/internal/config"
 	"github.com/jolehuit/clother/internal/launchers"
+	"github.com/jolehuit/clother/internal/profiles"
 	"github.com/jolehuit/clother/internal/providers"
 	"github.com/jolehuit/clother/internal/runtime"
 )
@@ -134,13 +135,25 @@ func configBuiltin(c Context, provider providers.Provider) (int, error) {
 		for idx, choice := range provider.ModelChoices {
 			fmt.Fprintf(c.Output.Stdout, "  %d. %-24s %s\n", idx+1, choice.ID, choice.Description)
 		}
+		// A pin the catalog no longer offers is shown but not offered as the
+		// default, so Enter resets it instead of silently keeping it.
 		defaultValue := provider.DefaultModel
+		fmt.Fprintf(c.Output.Stdout, "Catalog default: %s\n", provider.DefaultModel)
 		if override.Model != "" {
-			defaultValue = override.Model
+			pinned := strings.TrimSpace(override.Model)
+			if isStaleModelPin(provider, pinned) {
+				fmt.Fprintf(c.Output.Stdout, "Current pin:     %s (stale: not in the current catalog; Enter resets it)\n", pinned)
+			} else {
+				fmt.Fprintf(c.Output.Stdout, "Current pin:     %s (\"-\" resets to the catalog default)\n", pinned)
+				defaultValue = pinned
+			}
 		}
 		answer, err := c.Prompt.Prompt("Model", defaultValue)
 		if err != nil {
 			return 1, err
+		}
+		if strings.TrimSpace(answer) == "-" {
+			answer = provider.DefaultModel
 		}
 		answer = resolveModelChoice(answer, provider.ModelChoices)
 		if answer != "" && answer != provider.DefaultModel {
@@ -167,6 +180,11 @@ func configBuiltin(c Context, provider providers.Provider) (int, error) {
 		c.Config.ProviderOverrides[provider.ID] = override
 	}
 	return persistConfig(c)
+}
+
+// isStaleModelPin reports whether model is unknown to the provider's catalog.
+func isStaleModelPin(provider providers.Provider, model string) bool {
+	return len(profiles.ProviderStalePins(provider, config.ProviderOverride{Model: model})) > 0
 }
 
 // promptOptional asks for an optional value: empty keeps the current one and
