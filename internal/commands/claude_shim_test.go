@@ -699,6 +699,58 @@ func TestRunInstallNoClaudeShimRestoresRealClaude(t *testing.T) {
 	}
 }
 
+// Bug: syncClaudeShim's --no-claude-shim path calls restoreRealClaude, which
+// only warns on failure instead of returning an error. When the restore step
+// cannot actually remove the shim (e.g. a read-only BinDir), syncClaudeShim
+// still reports success by returning nil, silently leaving the shim in
+// place instead of surfacing the failure to the caller.
+//
+// This calls the unexported syncClaudeShim helper directly (not runInstall)
+// so the test cannot pass vacuously: runInstall also writes into BinDir
+// before reaching the shim-restore step (launchers.Sync copies the clother
+// binary), so a read-only BinDir could make runInstall fail for an unrelated
+// reason and the assertion would pass without ever exercising the restore
+// failure this test targets.
+//
+// FAILS today: syncClaudeShim returns nil even though the read-only BinDir
+// makes os.Remove(shim) inside restoreRealClaude fail.
+func TestSyncClaudeShimReturnsErrorWhenRestoreFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory permission bits do not block removal the same way on windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory write permission bits")
+	}
+
+	ctx, _ := newConfigTestContext(t, "")
+	ctx.Options.NoClaudeShim = true
+
+	binDir := ctx.Paths.BinDir
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	claudePath := filepath.Join(binDir, "claude")
+	if err := os.Symlink("clother", claudePath); err != nil {
+		t.Fatal(err)
+	}
+	realPath := filepath.Join(binDir, "claude-real")
+	if err := os.WriteFile(realPath, []byte("real"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Chmod(binDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(binDir, 0o755)
+	})
+
+	execPath := filepath.Join(binDir, "clother")
+	if err := syncClaudeShim(ctx, execPath, false); err == nil {
+		t.Fatal("syncClaudeShim() error = nil, want a non-nil error: the read-only BinDir must make the shim restore fail visibly")
+	}
+}
+
 // Companion to TestRunInstallSkipsShimWhenNoRealClaudeFound: with no flags
 // and no claude anywhere on PATH or preserved as claude-real, runInstall
 // must not create a claude shim pointing at nothing.

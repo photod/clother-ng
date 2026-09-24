@@ -133,13 +133,17 @@ func wantClaudeShim(c Context) bool {
 func syncClaudeShim(c Context, execPath string, isHomebrew bool) error {
 	if !wantClaudeShim(c) {
 		if c.Options.NoClaudeShim {
-			restoreRealClaude(c)
+			return restoreRealClaude(c)
 		}
 		return nil
 	}
 	realClaude, err := runtime.FindRealClaude(c.Paths)
 	if err != nil {
-		c.Output.Warn("claude not found; the `claude` shim was skipped. Run `clother install --claude-shim` again after installing Claude Code")
+		if launchers.IsClotherShim(filepath.Join(c.Paths.BinDir, "claude")) {
+			c.Output.Warn("claude not found; the existing `claude` shim was left as is. Run `clother install` again after installing Claude Code")
+		} else {
+			c.Output.Warn("claude not found; the `claude` shim was not created. Run `clother install --claude-shim` again after installing Claude Code")
+		}
 		return nil
 	}
 	if err := runtime.PreserveRealClaude(c.Paths, realClaude); err != nil {

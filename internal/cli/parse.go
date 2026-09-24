@@ -14,7 +14,8 @@ type Options struct {
 	BinDir   string
 	Format   string
 	// ClaudeShim and NoClaudeShim opt in to or out of the `claude` shim on
-	// install. With neither, an existing Clother shim is kept as is.
+	// install. With neither, an existing Clother shim is kept (and re-pointed at
+	// the current binary) and no new one is created.
 	ClaudeShim   bool
 	NoClaudeShim bool
 }

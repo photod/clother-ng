@@ -230,15 +230,25 @@ func promptTierModels(c Context, current config.TierModels) (config.TierModels, 
 }
 
 // promptCatalogTiers lets a catalog provider map each Claude Code tier to its
-// own model. Each prompt defaults to what the tier gets without a mapping, and
-// only answers that differ from it are stored.
+// own model. Each prompt defaults to what the tier gets at launch without a
+// mapping, and only answers that differ from it are stored. A stale explicit
+// tier is shown but not offered as the default, so Enter resets it.
 func promptCatalogTiers(c Context, provider providers.Provider, model string, current config.TierModels) (config.TierModels, error) {
-	ok, err := c.Prompt.Confirm("Map tiers separately? (Opus, Sonnet, Haiku, Fable, Subagent)", len(current.Map()) > 0)
+	label := "Map tiers separately? (Opus, Sonnet, Haiku, Fable, Subagent)"
+	hasTiers := len(current.Map()) > 0
+	if hasTiers {
+		label = "Map tiers separately? (no clears the current tier mappings)"
+	}
+	ok, err := c.Prompt.Confirm(label, hasTiers)
 	if err != nil || !ok {
 		return config.TierModels{}, err
 	}
-	baseline := baselineTiers(provider, model)
+	baseline := baselineTiers(c, provider, model)
 	explicit := current.Map()
+	stale := map[string]bool{}
+	for _, pin := range profiles.ProviderStalePins(provider, config.ProviderOverride{TierModels: current}) {
+		stale[pin.Field] = true
+	}
 	var out config.TierModels
 	for _, tier := range []struct {
 		name  string
@@ -253,7 +263,11 @@ func promptCatalogTiers(c Context, provider providers.Provider, model string, cu
 	} {
 		defaultValue := baseline[tier.name]
 		if value := explicit[tier.name]; value != "" {
-			defaultValue = value
+			if stale[tier.name] {
+				fmt.Fprintf(c.Output.Stdout, "%s pin %s is stale: not in the current catalog; Enter resets it\n", tier.label, value)
+			} else {
+				defaultValue = value
+			}
 		}
 		answer, err := c.Prompt.Prompt(tier.label, defaultValue)
 		if err != nil {
@@ -270,24 +284,16 @@ func promptCatalogTiers(c Context, provider providers.Provider, model string, cu
 	return out, nil
 }
 
-// baselineTiers is the tier mapping without explicit tiers: every tier follows
-// a pinned model, otherwise the catalog mapping with the default model filling
-// gaps and fable following opus.
-func baselineTiers(provider providers.Provider, model string) map[string]string {
-	tiers := map[string]string{providers.TierSubagent: provider.ModelTiers[providers.TierSubagent]}
-	for _, tier := range []string{providers.TierOpus, providers.TierSonnet, providers.TierHaiku, providers.TierFable} {
-		switch {
-		case model != "":
-			tiers[tier] = model
-		case provider.ModelTiers[tier] != "":
-			tiers[tier] = provider.ModelTiers[tier]
-		case tier == providers.TierFable:
-			tiers[tier] = tiers[providers.TierOpus]
-		default:
-			tiers[tier] = provider.DefaultModel
-		}
+// baselineTiers is what each tier resolves to at launch with the given model
+// pin and no explicit tier mapping, computed by the launch code itself so the
+// prompt defaults cannot drift from it.
+func baselineTiers(c Context, provider providers.Provider, model string) map[string]string {
+	cfg := &config.File{ProviderOverrides: map[string]config.ProviderOverride{provider.ID: {Model: model}}}
+	target, err := profiles.Resolve(provider.ID, c.Catalog, cfg)
+	if err != nil {
+		return map[string]string{}
 	}
-	return tiers
+	return profiles.EffectiveTiers(target)
 }
 
 // promptOptionalSecret stores, keeps or removes an optional credential. The

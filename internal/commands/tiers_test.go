@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/jolehuit/clother/internal/config"
+	"github.com/jolehuit/clother/internal/profiles"
 	"github.com/jolehuit/clother/internal/providers"
 	"github.com/jolehuit/clother/internal/ui"
 )
@@ -173,5 +174,169 @@ func TestConfigBuiltinSubagentPromptStoresExplicitValue(t *testing.T) {
 
 	if override.SubagentModel != "glm-5.3-flash" {
 		t.Fatalf("SubagentModel = %q, want glm-5.3-flash", override.SubagentModel)
+	}
+}
+
+// tierPromptDefault extracts the bracketed default value printed for a tier
+// prompt label (e.g. "Opus model"), tolerating model IDs that themselves
+// contain brackets (e.g. "glm-5.3-flash[1m]" or "k3[1m]"): the closing
+// "]: " that ends the prompt is found by scanning forward from the label,
+// which lands on the outermost bracket since a bracket inside a model ID is
+// never itself followed by ": ".
+func tierPromptDefault(t *testing.T, out, label string) string {
+	t.Helper()
+	marker := label + " ["
+	idx := strings.Index(out, marker)
+	if idx < 0 {
+		if strings.Contains(out, label+": ") {
+			return ""
+		}
+		t.Fatalf("prompt %q not found in output:\n%s", label, out)
+	}
+	rest := out[idx+len(marker):]
+	end := strings.Index(rest, "]: ")
+	if end < 0 {
+		t.Fatalf("prompt %q default not terminated (no \"]: \") in output:\n%s", label, out)
+	}
+	return rest[:end]
+}
+
+// Tier prompt defaults must equal what launch actually produces.
+//
+// kimi is a catalog provider whose model_tiers include a "subagent" entry
+// equal to its default model (k3-256k). Pinning the launch model to a
+// different model_choice ("k3[1m]") makes profiles.Resolve drop the catalog
+// subagent mapping entirely (override.Model replaces the whole tier map with
+// opus/sonnet/haiku/fable = that model; see internal/profiles/resolve.go),
+// so EffectiveTiers has no subagent entry once launched. The Subagent tier
+// prompt must default to that same "no mapping" state, not to the catalog's
+// now-irrelevant k3-256k.
+//
+// FAILS today: baselineTiers always uses the catalog subagent value
+// (provider.ModelTiers["subagent"]) regardless of the pinned model, so the
+// Subagent prompt still shows "[k3-256k]" as its default.
+func TestConfigBuiltinSubagentPromptDefaultDropsWhenModelIsPinned(t *testing.T) {
+	input := strings.Join([]string{"", "2", "y", "", "", "", "", ""}, "\n") + "\n"
+	ctx, cfg, stdout := newTiersTestContext(t, input)
+
+	provider, ok := ctx.Catalog.Get("kimi")
+	if !ok {
+		t.Fatal("kimi provider missing from catalog")
+	}
+	catalogSubagent := provider.ModelTiers[providers.TierSubagent]
+	if catalogSubagent == "" {
+		t.Fatal("kimi provider has no catalog subagent tier; pick another provider with one")
+	}
+
+	if _, err := configBuiltin(ctx, provider); err != nil {
+		t.Fatal(err)
+	}
+
+	override, exists := cfg.ProviderOverrides["kimi"]
+	if !exists {
+		t.Fatal("expected a stored kimi override")
+	}
+	if override.Model != "k3[1m]" {
+		t.Fatalf("override.Model = %q, want k3[1m] (the pinned model choice)", override.Model)
+	}
+	if override.SubagentModel != "" {
+		t.Fatalf("override.SubagentModel = %q, want empty (Enter must not pin the catalog subagent model)", override.SubagentModel)
+	}
+
+	out := stdout.String()
+	if strings.Contains(out, "Subagent model ["+catalogSubagent+"]") {
+		t.Fatalf("Subagent prompt default still shows the catalog subagent model %q even though the launch model is pinned to %q, got:\n%s",
+			catalogSubagent, override.Model, out)
+	}
+
+	target, err := profiles.Resolve("kimi", ctx.Catalog, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	effective := profiles.EffectiveTiers(target)
+	if got := effective[providers.TierSubagent]; got != "" {
+		t.Fatalf("EffectiveTiers(Resolve(\"kimi\", ...))[subagent] = %q, want empty or absent: the prompt default must match what launch resolves to", got)
+	}
+}
+
+// General case: with no pin at all, the bracketed defaults printed for
+// Opus, Sonnet, Haiku and Fable must equal what launch resolves those tiers
+// to. May pass today: zai's catalog has no "subagent" entry, so this test
+// does not exercise the bug above, only that the non-subagent tiers stay
+// correct.
+func TestConfigBuiltinPerTierPromptDefaultsMatchEffectiveTiersWithoutPin(t *testing.T) {
+	input := strings.Join([]string{"", "", "y", "", "", "", "", ""}, "\n") + "\n"
+	ctx, _, stdout := newTiersTestContext(t, input)
+
+	provider, ok := ctx.Catalog.Get("zai")
+	if !ok {
+		t.Fatal("zai provider missing from catalog")
+	}
+	if _, err := configBuiltin(ctx, provider); err != nil {
+		t.Fatal(err)
+	}
+
+	cfgWithoutOverride := &config.File{ProviderOverrides: map[string]config.ProviderOverride{}}
+	target, err := profiles.Resolve("zai", ctx.Catalog, cfgWithoutOverride)
+	if err != nil {
+		t.Fatal(err)
+	}
+	effective := profiles.EffectiveTiers(target)
+
+	out := stdout.String()
+	for _, tier := range []struct {
+		name  string
+		label string
+	}{
+		{providers.TierOpus, "Opus model"},
+		{providers.TierSonnet, "Sonnet model"},
+		{providers.TierHaiku, "Haiku model"},
+		{providers.TierFable, "Fable model"},
+	} {
+		want := effective[tier.name]
+		got := tierPromptDefault(t, out, tier.label)
+		if got != want {
+			t.Fatalf("printed default for %q = %q, want %q (EffectiveTiers(Resolve(\"zai\", ...))[%s])", tier.label, got, want, tier.name)
+		}
+	}
+}
+
+// Stale tier pins must be reset by the tier prompts, not kept: a value
+// already pinned to a tier (here haiku -> "glm-4.7") that the catalog no
+// longer offers should not be re-stored just because Enter defaulted to it,
+// and the prompt output should call out that the pin is stale.
+//
+// FAILS today: promptCatalogTiers treats any pinned tier value as a valid
+// default and keeps it verbatim when the answer matches the default, and
+// nothing in the prompt output mentions staleness.
+func TestConfigBuiltinPerTierPromptsResetsStaleTierPin(t *testing.T) {
+	input := strings.Join([]string{"", "", "", "", "", "", "", ""}, "\n") + "\n"
+	preset := config.ProviderOverride{TierModels: config.TierModels{HaikuModel: "glm-4.7"}}
+	override, _, out := runZaiTierScenario(t, input, preset, true)
+
+	if override.HaikuModel != "" {
+		t.Fatalf("HaikuModel = %q, want the stale pin reset to empty", override.HaikuModel)
+	}
+	if !strings.Contains(out, "glm-4.7") {
+		t.Fatalf("stdout does not mention the stale pin glm-4.7, got:\n%s", out)
+	}
+	if !strings.Contains(strings.ToLower(out), "stale") {
+		t.Fatalf("stdout does not mention that the pin is stale, got:\n%s", out)
+	}
+}
+
+// The "Map tiers separately?" confirm prompt must warn that declining it
+// clears any tiers already pinned explicitly, when such tiers exist.
+//
+// FAILS today: the confirm label is the fixed string "Map tiers separately?
+// (Opus, Sonnet, Haiku, Fable, Subagent)" regardless of whether explicit
+// tiers exist, and never mentions clearing.
+func TestConfigBuiltinTierConfirmMentionsClearingWhenTiersExist(t *testing.T) {
+	input := strings.Join([]string{"", "", "n"}, "\n") + "\n"
+	preset := config.ProviderOverride{TierModels: config.TierModels{OpusModel: "glm-5.3"}}
+	_, _, out := runZaiTierScenario(t, input, preset, true)
+
+	if !strings.Contains(out, "clears") {
+		t.Fatalf("stdout does not mention that declining clears the existing tier mappings, got:\n%s", out)
 	}
 }
