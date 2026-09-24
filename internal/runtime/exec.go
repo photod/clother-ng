@@ -159,6 +159,11 @@ func printResumeHintFromProject(cwd string, before session.ProjectSession, resum
 	fmt.Fprintf(os.Stdout, "\nOr reopen with the same provider:\n%s --resume %s\n", resumeCommand, after.ID)
 }
 
+// IsTTY reports whether file is a terminal.
+func IsTTY(file *os.File) bool {
+	return isTTY(file)
+}
+
 func isTTY(file *os.File) bool {
 	info, err := file.Stat()
 	return err == nil && (info.Mode()&os.ModeCharDevice) != 0
